@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -143,10 +144,13 @@ def run_query(query: str) -> pd.DataFrame:
 
 def run_pipeline(product_category: str) -> None:
     """Run the scraper, NLP processor, and database loader sequentially."""
+    os.makedirs(PROJECT_ROOT / "data" / "raw", exist_ok=True)
+    os.makedirs(PROJECT_ROOT / "data" / "processed", exist_ok=True)
+
     commands = [
-        ["python3", "src/scraper.py"],
-        ["python3", "src/nlp_processor.py"],
-        ["python3", "src/db_connector.py"],
+        [sys.executable, "src/scraper.py"],
+        [sys.executable, "src/nlp_processor.py"],
+        [sys.executable, "src/db_connector.py"],
     ]
     env = os.environ.copy()
     env["PRODUCT_CATEGORY"] = product_category.strip()
@@ -257,13 +261,10 @@ def sidebar() -> str:
             try:
                 run_pipeline(product_category)
             except subprocess.CalledProcessError as exc:
-                st.error("The intelligence pipeline failed during execution.")
-                if exc.stderr:
-                    st.code(exc.stderr)
-                elif exc.stdout:
-                    st.code(exc.stdout)
+                exc = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+                st.error(f"Pipeline failed: {exc}")
             except Exception as exc:
-                st.error(f"Unable to run the intelligence pipeline: {exc}")
+                st.error(f"Pipeline failed: {exc}")
 
         st.divider()
         st.markdown("### Warehouse Status")
