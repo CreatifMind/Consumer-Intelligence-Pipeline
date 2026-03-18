@@ -4,3 +4,4 @@ plotly
 scikit-learn
 SQLAlchemy
 beautifulsoup4
+psycopg2-binary

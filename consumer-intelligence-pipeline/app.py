@@ -1,29 +1,14 @@
 from __future__ import annotations
 
-# Standard library imports for file paths and the local SQLite connection.
-import sqlite3
-from pathlib import Path
-
-# Third-party imports for data access, visualization, and the Streamlit UI.
-try:
-    import pandas as pd  # type: ignore
-except ImportError:
-    pd = None
-
-try:
-    import plotly.express as px  # type: ignore
-except ImportError:
-    px = None
-
-try:
-    import streamlit as st  # type: ignore
-except ImportError:
-    st = None
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 
-# Keep the original page configuration so the app still feels like the same product.
-if st is not None:
-    st.set_page_config(
+st.set_page_config(
     page_title="Consumer Intelligence Platform",
     page_icon="CI",
     layout="wide",
@@ -31,14 +16,21 @@ if st is not None:
 )
 
 
-# Resolve the database path relative to the project root so the app works regardless of
-# where it is launched from inside the repository.
-PROJECT_ROOT = Path(__file__).resolve().parent
-DATABASE_PATH = PROJECT_ROOT / "retail_intelligence.db"
+def get_database_url() -> str:
+    """Read the PostgreSQL connection string from Streamlit secrets."""
+    try:
+        return st.secrets["DATABASE_URL"]
+    except Exception as exc:
+        raise KeyError("Missing DATABASE_URL in Streamlit secrets.") from exc
+
+
+@st.cache_resource(show_spinner=False)
+def get_engine() -> Engine:
+    """Create and reuse a SQLAlchemy engine for the PostgreSQL warehouse."""
+    return create_engine(get_database_url(), pool_pre_ping=True)
 
 
 def apply_theme() -> None:
-    """Apply the original visual theme so the production app keeps the polished look."""
     st.markdown(
         """
         <style>
@@ -124,7 +116,6 @@ def apply_theme() -> None:
 
 
 def page_header(title: str, subtitle: str) -> None:
-    """Render a consistent header banner across all pages."""
     st.markdown(
         f"""
         <div class="hero-card">
@@ -138,91 +129,67 @@ def page_header(title: str, subtitle: str) -> None:
 
 @st.cache_data(show_spinner=False)
 def run_query(query: str) -> pd.DataFrame:
-    """
-    Execute a cached SQL query against the local SQLite warehouse.
-
-    Streamlit caches the returned DataFrame, which prevents repeat reads every time
-    the user changes pages or interacts with the app.
-    """
-    if not DATABASE_PATH.exists():
-        raise FileNotFoundError(
-            f"SQLite database not found at {DATABASE_PATH}. Run src/db_connector.py first."
-        )
-
-    with sqlite3.connect(DATABASE_PATH) as connection:
-        return pd.read_sql_query(query, connection)
+    """Execute a cached SQL query against the PostgreSQL warehouse."""
+    with get_engine().connect() as connection:
+        return pd.read_sql_query(text(query), connection)
 
 
 def load_executive_kpis() -> pd.Series:
-    """Load the KPI metrics used on the Executive Summary page."""
     query = """
         SELECT
             (SELECT COUNT(*) FROM Dim_Product) AS total_products,
             (SELECT COUNT(*) FROM Fact_Reviews) AS total_reviews,
             (SELECT COUNT(*) FROM Dim_Topic) AS total_topics,
-            (SELECT ROUND(AVG(Star_Rating), 2) FROM Fact_Reviews) AS average_rating,
-            (SELECT ROUND(AVG(Topic_Confidence), 4) FROM Fact_Reviews) AS average_topic_confidence
+            (SELECT ROUND(AVG(Star_Rating)::numeric, 2) FROM Fact_Reviews) AS average_rating,
+            (SELECT ROUND(AVG(Topic_Confidence)::numeric, 4) FROM Fact_Reviews) AS average_topic_confidence
     """
     return run_query(query).iloc[0]
 
 
 def load_topic_distribution() -> pd.DataFrame:
-    """
-    Load the live sentiment/topic breakdown by joining the fact table with the topic dimension.
-
-    This is the required SQL aggregation for the Consumer Sentiment page.
-    """
     query = """
         SELECT
-            t.Topic_Name AS Topic_Label,
-            COUNT(*) AS Review_Count,
-            ROUND(AVG(f.Topic_Confidence), 4) AS Avg_Confidence,
-            ROUND(AVG(f.Star_Rating), 2) AS Avg_Rating
+            t.Topic_Name AS "Topic_Label",
+            COUNT(*) AS "Review_Count",
+            ROUND(AVG(f.Topic_Confidence)::numeric, 4) AS "Avg_Confidence",
+            ROUND(AVG(f.Star_Rating)::numeric, 2) AS "Avg_Rating"
         FROM Fact_Reviews AS f
         INNER JOIN Dim_Topic AS t
             ON f.Topic_Key = t.Topic_Key
         GROUP BY t.Topic_Name
-        ORDER BY Review_Count DESC, t.Topic_Name
+        ORDER BY "Review_Count" DESC, "Topic_Label"
     """
     return run_query(query)
 
 
-def load_pricing_snapshot() -> "pd.DataFrame":
-    """
-    Load a live pricing snapshot from the warehouse.
-
-    The current star schema stores the latest known product price in Dim_Product, so this
-    page presents a current-state pricing view instead of a historical trend line.
-    """
+def load_pricing_snapshot() -> pd.DataFrame:
     query = """
         SELECT
-            p.Product_Name,
-            p.Current_Price,
-            ROUND(AVG(f.Star_Rating), 2) AS Avg_Rating,
-            COUNT(f.Review_Key) AS Review_Count,
-            MAX(t.Topic_Name) AS Topic_Label
+            p.Product_Name AS "Product_Name",
+            p.Current_Price AS "Current_Price",
+            ROUND(AVG(f.Star_Rating)::numeric, 2) AS "Avg_Rating",
+            COUNT(f.Review_Key) AS "Review_Count",
+            MAX(t.Topic_Name) AS "Topic_Label"
         FROM Dim_Product AS p
         LEFT JOIN Fact_Reviews AS f
             ON p.Product_Key = f.Product_Key
         LEFT JOIN Dim_Topic AS t
             ON f.Topic_Key = t.Topic_Key
         GROUP BY p.Product_Key, p.Product_Name, p.Current_Price
-        ORDER BY p.Current_Price DESC, p.Product_Name
+        ORDER BY "Current_Price" DESC, "Product_Name"
     """
     return run_query(query)
 
 
 def load_last_refresh() -> str:
-    """Return the latest warehouse load timestamp to show freshness in the UI."""
     query = """
-        SELECT COALESCE(MAX(Load_Timestamp), 'Unavailable') AS last_refresh
+        SELECT COALESCE(MAX(Load_Timestamp)::text, 'Unavailable') AS last_refresh
         FROM Fact_Reviews
     """
     return str(run_query(query).iloc[0]["last_refresh"])
 
 
 def render_insight_card(label: str, value: str, body: str) -> None:
-    """Render a reusable insight card on the right-hand side of dashboard pages."""
     st.markdown(
         f"""
         <div class="insight-card">
@@ -236,10 +203,9 @@ def render_insight_card(label: str, value: str, body: str) -> None:
 
 
 def sidebar() -> str:
-    """Render the original sidebar navigation, now backed by live warehouse metadata."""
     with st.sidebar:
         st.markdown("## Consumer Intelligence")
-        st.caption("Portfolio demo powered by a local SQLite star schema")
+        st.caption("Portfolio demo powered by a cloud-hosted PostgreSQL star schema")
         st.divider()
 
         page = st.radio(
@@ -250,7 +216,7 @@ def sidebar() -> str:
 
         st.divider()
         st.markdown("### Warehouse Status")
-        st.caption(f"Database: `{DATABASE_PATH.name}`")
+        st.caption("Database: `PostgreSQL via st.secrets[\"DATABASE_URL\"]`")
         st.caption(f"Last refresh: `{load_last_refresh()}`")
         st.caption("Source tables: `Dim_Product`, `Dim_Topic`, `Fact_Reviews`")
 
@@ -258,14 +224,13 @@ def sidebar() -> str:
 
 
 def render_executive_summary() -> None:
-    """Render the executive overview with live KPIs and topic highlights."""
     kpis = load_executive_kpis()
     topic_df = load_topic_distribution()
     pricing_df = load_pricing_snapshot()
 
     page_header(
         "Executive Summary",
-        "A live leadership view of product coverage, review volume, topic mix, and pricing signals from the local retail intelligence warehouse.",
+        "A live leadership view of product coverage, review volume, topic mix, and pricing signals from the retail intelligence warehouse.",
     )
 
     col1, col2, col3, col4 = st.columns(4)
@@ -334,12 +299,11 @@ def render_executive_summary() -> None:
 
 
 def render_consumer_sentiment() -> None:
-    """Render the live topic distribution page backed by the warehouse join query."""
     topic_df = load_topic_distribution()
 
     page_header(
         "Consumer Sentiment",
-        "Live NLP topic aggregation from the SQLite warehouse, built by joining Fact_Reviews and Dim_Topic.",
+        "Live NLP topic aggregation from the PostgreSQL warehouse, built by joining Fact_Reviews and Dim_Topic.",
     )
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -398,7 +362,6 @@ def render_consumer_sentiment() -> None:
 
 
 def render_pricing_intelligence() -> None:
-    """Render a live pricing snapshot from the product dimension."""
     pricing_df = load_pricing_snapshot()
 
     page_header(
@@ -451,7 +414,6 @@ def render_pricing_intelligence() -> None:
 
 
 def main() -> None:
-    """Application entry point."""
     apply_theme()
 
     try:
@@ -463,9 +425,11 @@ def main() -> None:
             render_consumer_sentiment()
         else:
             render_pricing_intelligence()
-    except FileNotFoundError as exc:
+    except (KeyError, SQLAlchemyError) as exc:
         st.error(str(exc))
-        st.info("Run `python3 src/db_connector.py` from the project root to build and load the warehouse.")
+        st.info(
+            "Configure `DATABASE_URL` in Streamlit secrets and run `python3 src/db_connector.py` to load the PostgreSQL warehouse."
+        )
     except Exception as exc:
         st.error(f"Unable to load dashboard data: {exc}")
 
