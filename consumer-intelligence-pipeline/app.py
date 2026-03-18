@@ -204,17 +204,14 @@ def load_pricing_snapshot() -> pd.DataFrame:
     query = """
         SELECT
             p.product_name AS product_name,
-            p.current_price AS current_price,
+            ROUND(AVG(p.current_price)::numeric, 2) AS avg_price,
             ROUND(AVG(f.star_rating)::numeric, 2) AS avg_rating,
-            COUNT(f.review_key) AS review_count,
-            MAX(t.topic_name) AS topic_label
-        FROM dim_product AS p
-        LEFT JOIN fact_reviews AS f
+            COUNT(f.review_key) AS review_count
+        FROM fact_reviews AS f
+        INNER JOIN dim_product AS p
             ON p.product_key = f.product_key
-        LEFT JOIN dim_topic AS t
-            ON f.topic_key = t.topic_key
-        GROUP BY p.product_key, p.product_name, p.current_price
-        ORDER BY current_price DESC, product_name
+        GROUP BY p.product_name
+        ORDER BY avg_price DESC, product_name
     """
     return run_query(query)
 
@@ -344,9 +341,9 @@ def render_executive_summary() -> None:
         )
         st.write("")
         render_insight_card(
-            "Highest Current Price",
-            f"{str(priciest_product['product_name'])} (${float(priciest_product['current_price']):.2f})",
-            "This is sourced directly from dim_product and reflects the latest price snapshot currently stored in the warehouse.",
+            "Highest Avg Price",
+            f"{str(priciest_product['product_name'])} (${float(priciest_product['avg_price']):.2f})",
+            "This is calculated from the live product-level pricing dataset used in the Pricing Intelligence analysis.",
         )
 
 
@@ -415,40 +412,51 @@ def render_consumer_sentiment() -> None:
 
 def render_pricing_intelligence() -> None:
     pricing_df = load_pricing_snapshot()
+    average_dataset_price = pricing_df["avg_price"].mean()
+    value_picks_df = pricing_df[
+        (pricing_df["avg_rating"] > 4.0) & (pricing_df["avg_price"] < average_dataset_price)
+    ].sort_values(["avg_rating", "avg_price"], ascending=[False, True])
 
     page_header(
         "Pricing Intelligence",
-        "Live pricing snapshot from dim_product. A historical trend line can be added later by introducing a dedicated price history fact table.",
+        "Compare price against customer satisfaction to see whether higher spend is translating into better perceived quality.",
     )
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Average Listed Price", f"${pricing_df['current_price'].mean():.2f}")
-    col2.metric("Highest Listed Price", f"${pricing_df['current_price'].max():.2f}")
-    col3.metric("Lowest Listed Price", f"${pricing_df['current_price'].min():.2f}")
+    col1.metric("Average Product Price", f"${average_dataset_price:.2f}")
+    col2.metric("Average Star Rating", f"{pricing_df['avg_rating'].mean():.2f}")
+    col3.metric("Top Value Picks", f"{len(value_picks_df):,}")
 
     st.write("")
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("Current Product Price Snapshot")
+    st.subheader("Price vs. Rating Analysis")
 
-    fig = px.bar(
-        pricing_df.sort_values("current_price", ascending=False),
-        x="product_name",
-        y="current_price",
+    fig = px.scatter(
+        pricing_df,
+        x="avg_price",
+        y="avg_rating",
+        hover_name="product_name",
+        custom_data=["review_count"],
+        hover_data={
+            "product_name": False,
+            "avg_price": ":.2f",
+            "avg_rating": ":.2f",
+            "review_count": True,
+        },
         color="avg_rating",
+        size="review_count",
         color_continuous_scale="Tealgrn",
-        text="current_price",
-        custom_data=["topic_label", "review_count"],
+        trendline="ols",
     )
     fig.update_traces(
-        texttemplate="$%{y:.2f}",
-        textposition="outside",
         hovertemplate=(
-            "<b>%{x}</b><br>"
-            "Current price: $%{y:.2f}<br>"
-            "Avg rating: %{marker.color:.2f}<br>"
-            "Topic label: %{customdata[0]}<br>"
-            "Reviews: %{customdata[1]}<extra></extra>"
+            "<b>%{hovertext}</b><br>"
+            "Price: $%{x:.2f}<br>"
+            "Star rating: %{y:.2f}<br>"
+            "Reviews: %{customdata[0]}<extra></extra>"
         ),
+        marker=dict(line=dict(width=1, color="rgba(15, 23, 42, 0.35)")),
+        selector=dict(mode="markers"),
     )
     fig.update_layout(
         height=460,
@@ -456,13 +464,24 @@ def render_pricing_intelligence() -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         coloraxis_colorbar_title="Avg Rating",
-        xaxis_title="Product",
-        yaxis_title="Current Price ($)",
+        xaxis_title="Price ($)",
+        yaxis_title="Star Rating",
     )
     st.plotly_chart(fig, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.dataframe(pricing_df, use_container_width=True, hide_index=True)
+    st.write("")
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("Top Value Picks")
+    st.write(
+        "Products shown here have an average rating above 4.0 while staying below the current dataset's average price."
+    )
+    st.dataframe(
+        value_picks_df[["product_name", "avg_price", "avg_rating", "review_count"]],
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main() -> None:
