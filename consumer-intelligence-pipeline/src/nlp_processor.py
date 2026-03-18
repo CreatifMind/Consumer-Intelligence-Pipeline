@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from itertools import permutations
 from pathlib import Path
 
 import pandas as pd
@@ -8,159 +9,107 @@ from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
 
 
-STOP_WORDS = set(ENGLISH_STOP_WORDS).union(
-    {
-        "earbud",
-        "earbuds",
-        "wireless",
-        "product",
-        "overall",
-    }
-)
+# Use business-friendly labels for the three LDA topics.
+TOPIC_LABELS = ["Pricing", "Quality", "Delivery"]
 
-IRREGULAR_LEMMAS = {
-    "mice": "mouse",
-    "men": "man",
-    "women": "woman",
-    "teeth": "tooth",
-    "feet": "foot",
-    "better": "good",
-    "best": "good",
-    "worse": "bad",
-    "highs": "high",
-    "mids": "mid",
-}
-
+# Simple keyword dictionaries help translate model-generated terms into labels that
+# make sense in a business dashboard or portfolio project.
 TOPIC_KEYWORDS = {
-    "Pricing & Value": {"affordable", "budget", "entry", "premium", "price", "value"},
-    "Audio Quality": {
+    "Pricing": {"affordable", "budget", "entry", "premium", "price", "priced", "value"},
+    "Quality": {
         "audio",
         "bass",
         "clear",
-        "control",
+        "clarity",
+        "comfortable",
+        "comfort",
         "crisp",
-        "high",
-        "level",
-        "mic",
-        "mid",
+        "fit",
+        "microphone",
         "quality",
         "rich",
         "sound",
         "soundstage",
-        "strong",
-        "vocal",
     },
-    "Comfort & Fit": {"comfortable", "comfort", "ear", "fit", "runner", "session", "tip", "wear", "workout"},
-    "Battery & Performance": {"battery", "charg", "fast", "hour", "life", "performance"},
-    "Connectivity & Usability": {
+    "Delivery": {
         "app",
+        "battery",
         "bluetooth",
         "call",
         "case",
-        "compact",
+        "charge",
+        "charging",
         "connectivity",
         "control",
-        "device",
-        "laptop",
+        "delivery",
         "pairing",
+        "reliable",
+        "shipping",
         "stable",
+        "support",
     },
-    "Service & Delivery": {"customer", "delivery", "issue", "resolution", "shipping", "support"},
 }
 
-
-def simple_lemmatize(token: str) -> str:
-    if token in IRREGULAR_LEMMAS:
-        return IRREGULAR_LEMMAS[token]
-
-    if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
-
-    if token.endswith("ing") and len(token) > 5:
-        lemma = token[:-3]
-        if len(lemma) > 2 and lemma[-1] == lemma[-2]:
-            lemma = lemma[:-1]
-        return lemma
-
-    if token.endswith("ed") and len(token) > 4:
-        lemma = token[:-2]
-        if len(lemma) > 2 and lemma[-1] == lemma[-2]:
-            lemma = lemma[:-1]
-        return lemma
-
-    if token.endswith("es") and len(token) > 4 and not token.endswith("ses"):
-        return token[:-2]
-
-    if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
-        return token[:-1]
-
-    return token
+# Extend scikit-learn's English stop word list with domain words that do not add much
+# analytical value in this small product-review dataset.
+STOP_WORDS = sorted(
+    set(ENGLISH_STOP_WORDS).union({"earbud", "earbuds", "wireless", "product", "products"})
+)
 
 
-def preprocess_text(text: str) -> str:
-    normalized_text = re.sub(r"[^a-zA-Z\s]", " ", str(text).lower())
-    tokens = normalized_text.split()
-
-    cleaned_tokens = []
-    for token in tokens:
-        if token in STOP_WORDS or len(token) < 3:
-            continue
-
-        lemma = simple_lemmatize(token)
-        if lemma and lemma not in STOP_WORDS and len(lemma) >= 3:
-            cleaned_tokens.append(lemma)
-
-    return " ".join(cleaned_tokens)
+def normalize_text(text: object) -> str:
+    """Normalize review text before vectorization."""
+    cleaned_text = re.sub(r"[^a-zA-Z\s]", " ", str(text).lower())
+    return re.sub(r"\s+", " ", cleaned_text).strip()
 
 
-def infer_topic_label(topic_terms: list[str], topic_index: int) -> str:
-    best_label = f"Topic {topic_index + 1}"
-    best_score = 0
+def score_topic_labels(topic_terms_list: list[list[str]]) -> tuple[str, ...]:
+    """
+    Assign unique business-friendly labels to the discovered LDA topics.
 
-    for label, keywords in TOPIC_KEYWORDS.items():
-        score = len(set(topic_terms) & keywords)
-        if score > best_score:
-            best_label = label
-            best_score = score
+    Because we always train three topics, we evaluate all label permutations and keep
+    the mapping with the highest keyword overlap score.
+    """
+    score_lookup: list[dict[str, int]] = []
+    for topic_terms in topic_terms_list:
+        topic_term_set = set(topic_terms)
+        topic_scores = {
+            label: len(topic_term_set & keywords)
+            for label, keywords in TOPIC_KEYWORDS.items()
+        }
+        score_lookup.append(topic_scores)
 
-    if best_score == 0:
-        best_label = f"Topic {topic_index + 1}: {topic_terms[0].title()}"
-
-    return best_label
-
-
-def ensure_unique_labels(topic_details: list[dict]) -> list[dict]:
-    label_counts: dict[str, int] = {}
-
-    for detail in topic_details:
-        label = detail["label"]
-        label_counts[label] = label_counts.get(label, 0) + 1
-        if label_counts[label] > 1:
-            detail["label"] = f"{label} ({detail['top_terms'][0]})"
-
-    return topic_details
+    return max(
+        permutations(TOPIC_LABELS, len(topic_terms_list)),
+        key=lambda candidate: sum(
+            score_lookup[index].get(label, 0) for index, label in enumerate(candidate)
+        ),
+    )
 
 
 def summarize_topics(
     lda_model: LatentDirichletAllocation,
     vectorizer: CountVectorizer,
-    top_n_terms: int = 5,
-) -> list[dict]:
+    top_n_terms: int = 6,
+) -> list[dict[str, object]]:
+    """Collect the top terms for each model topic and attach a business label."""
     feature_names = vectorizer.get_feature_names_out()
-    topic_details = []
+    topic_terms_list: list[list[str]] = []
 
-    for topic_index, weights in enumerate(lda_model.components_):
-        top_indices = weights.argsort()[-top_n_terms:][::-1]
-        top_terms = [feature_names[index] for index in top_indices]
-        topic_details.append(
-            {
-                "topic_id": topic_index,
-                "label": infer_topic_label(top_terms, topic_index),
-                "top_terms": top_terms,
-            }
-        )
+    for topic_weights in lda_model.components_:
+        top_term_indices = topic_weights.argsort()[-top_n_terms:][::-1]
+        topic_terms_list.append([feature_names[index] for index in top_term_indices])
 
-    return ensure_unique_labels(topic_details)
+    assigned_labels = score_topic_labels(topic_terms_list)
+
+    return [
+        {
+            "topic_id": topic_index,
+            "label": assigned_labels[topic_index],
+            "top_terms": topic_terms,
+        }
+        for topic_index, topic_terms in enumerate(topic_terms_list)
+    ]
 
 
 def main() -> None:
@@ -175,29 +124,31 @@ def main() -> None:
         reviews_df = pd.read_csv(raw_path)
 
         if "review_text" not in reviews_df.columns:
-            raise ValueError("The required 'review_text' column is missing from the input dataset.")
+            raise ValueError("The input dataset must include a 'review_text' column.")
 
         print(f"[INFO] Loaded {len(reviews_df)} review records.")
-        print("[INFO] Starting text preprocessing: stop-word removal, punctuation cleanup, and lemmatization.")
+        print("[INFO] Preprocessing review text and removing stop words with CountVectorizer.")
 
-        processed_reviews = reviews_df["review_text"].fillna("").map(preprocess_text)
-        valid_reviews = processed_reviews.str.strip().ne("")
+        reviews_df["clean_review_text"] = reviews_df["review_text"].fillna("").map(normalize_text)
+        valid_reviews = reviews_df["clean_review_text"].str.strip().ne("")
 
-        if not valid_reviews.any():
-            raise ValueError("No usable review text remained after preprocessing.")
-
-        print(f"[INFO] Preprocessing complete. Valid reviews available for modeling: {int(valid_reviews.sum())}")
-        print("[INFO] Building document-term matrix for LDA topic modeling.")
+        if int(valid_reviews.sum()) < 3:
+            raise ValueError("At least 3 non-empty reviews are required to train a 3-topic LDA model.")
 
         vectorizer = CountVectorizer(
-            max_features=100,
-            ngram_range=(1, 1),
+            stop_words=STOP_WORDS,
+            max_features=150,
             min_df=1,
             max_df=1.0,
         )
-        doc_term_matrix = vectorizer.fit_transform(processed_reviews[valid_reviews])
+        document_term_matrix = vectorizer.fit_transform(reviews_df.loc[valid_reviews, "clean_review_text"])
 
-        print(f"[INFO] Vectorization complete. Vocabulary size: {len(vectorizer.get_feature_names_out())}")
+        if document_term_matrix.shape[1] == 0:
+            raise ValueError("No usable vocabulary was generated from the review text.")
+
+        print(
+            f"[INFO] Preprocessing complete. Vocabulary size: {len(vectorizer.get_feature_names_out())}"
+        )
         print("[INFO] Training Latent Dirichlet Allocation model with 3 topics.")
 
         lda_model = LatentDirichletAllocation(
@@ -206,7 +157,7 @@ def main() -> None:
             max_iter=25,
             learning_method="batch",
         )
-        topic_distribution = lda_model.fit_transform(doc_term_matrix)
+        topic_distribution = lda_model.fit_transform(document_term_matrix)
 
         topic_details = summarize_topics(lda_model, vectorizer)
         topic_label_map = {detail["topic_id"]: detail["label"] for detail in topic_details}
@@ -226,8 +177,9 @@ def main() -> None:
         ]
         reviews_df.loc[valid_reviews, "Topic_Confidence"] = topic_confidences.round(4)
 
+        final_df = reviews_df.drop(columns=["clean_review_text"])
         processed_path.parent.mkdir(parents=True, exist_ok=True)
-        reviews_df.to_csv(processed_path, index=False)
+        final_df.to_csv(processed_path, index=False)
 
         print(f"[INFO] Categorized review data exported to: {processed_path}")
         print("[INFO] NLP processing job finished successfully.")

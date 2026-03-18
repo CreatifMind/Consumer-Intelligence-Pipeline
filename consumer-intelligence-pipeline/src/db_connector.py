@@ -111,7 +111,7 @@ def load_processed_reviews(csv_path: Path) -> pd.DataFrame:
     return cleaned_df
 
 
-def upsert_dimensions(connection, reviews_df: pd.DataFrame) -> tuple[dict[str, int], dict[str, int]]:
+def refresh_dimensions(connection, reviews_df: pd.DataFrame) -> tuple[dict[str, int], dict[str, int]]:
     product_dimension = (
         reviews_df[["product_name", "price"]]
         .drop_duplicates(subset=["product_name"])
@@ -125,13 +125,16 @@ def upsert_dimensions(connection, reviews_df: pd.DataFrame) -> tuple[dict[str, i
         .rename(columns={"Dominant_Topic": "topic_name"})
     )
 
+    # Rebuild the dimensions from the current processed file so the warehouse does not
+    # retain stale products or topic labels from previous modeling runs.
+    connection.execute(text("DELETE FROM Dim_Product"))
+    connection.execute(text("DELETE FROM Dim_Topic"))
+
     connection.execute(
         text(
             """
             INSERT INTO Dim_Product (Product_Name, Current_Price)
             VALUES (:product_name, :current_price)
-            ON CONFLICT(Product_Name) DO UPDATE SET
-                Current_Price = excluded.Current_Price
             """
         ),
         [
@@ -217,13 +220,12 @@ def main() -> None:
             print("[INFO] Creating star schema tables if they do not already exist.")
             create_star_schema(connection)
 
-            print("[INFO] Populating dimension tables.")
-            product_lookup, topic_lookup = upsert_dimensions(connection, reviews_df)
+            print("[INFO] Refreshing dimension and fact tables from the latest processed snapshot.")
+            connection.execute(text("DELETE FROM Fact_Reviews"))
+            product_lookup, topic_lookup = refresh_dimensions(connection, reviews_df)
 
             fact_rows = build_fact_rows(reviews_df, product_lookup, topic_lookup)
 
-            print("[INFO] Refreshing Fact_Reviews and loading the latest review snapshot.")
-            connection.execute(text("DELETE FROM Fact_Reviews"))
             connection.execute(
                 text(
                     """
