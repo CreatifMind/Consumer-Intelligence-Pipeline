@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -7,15 +8,15 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 
-MOCK_HTML = """
+MOCK_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Wireless Earbuds Search Results</title>
+    <title>{category_title} Search Results</title>
   </head>
   <body>
-    <main class="search-results" data-category="wireless-earbuds">
+    <main class="search-results" data-category="{category_slug}">
       <article class="product-card" data-sku="EB-1001">
         <h2 class="product-name">Auralink Air One</h2>
         <span class="price">$79.99</span>
@@ -203,10 +204,14 @@ def export_raw_data(df: pd.DataFrame) -> Path:
 
 
 def main() -> None:
-    print("[INFO] Daily extraction job started for category: wireless earbuds")
+    product_category = os.environ.get("PRODUCT_CATEGORY", "wireless earbuds").strip() or "wireless earbuds"
+    category_slug = product_category.lower().replace(" ", "-")
+    html = MOCK_HTML_TEMPLATE.format(category_title=product_category.title(), category_slug=category_slug)
+
+    print(f"[INFO] Daily extraction job started for category: {product_category}")
 
     try:
-        extracted_df = parse_search_results(MOCK_HTML)
+        extracted_df = parse_search_results(html)
         print(f"[INFO] Extraction completed. Records found: {len(extracted_df)}")
 
         cleaned_df = clean_price_column(extracted_df)

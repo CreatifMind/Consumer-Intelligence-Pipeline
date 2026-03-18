@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -14,6 +18,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def get_database_url() -> str:
@@ -134,14 +141,41 @@ def run_query(query: str) -> pd.DataFrame:
         return pd.read_sql_query(text(query), connection)
 
 
+def run_pipeline(product_category: str) -> None:
+    """Run the scraper, NLP processor, and database loader sequentially."""
+    commands = [
+        ["python3", "src/scraper.py"],
+        ["python3", "src/nlp_processor.py"],
+        ["python3", "src/db_connector.py"],
+    ]
+    env = os.environ.copy()
+    env["PRODUCT_CATEGORY"] = product_category.strip()
+
+    with st.spinner("Extracting and analyzing data..."):
+        for command in commands:
+            completed = subprocess.run(
+                command,
+                cwd=PROJECT_ROOT,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            if completed.stdout.strip():
+                st.session_state["latest_pipeline_log"] = completed.stdout.strip()
+
+    st.cache_data.clear()
+    st.rerun()
+
+
 def load_executive_kpis() -> pd.Series:
     query = """
         SELECT
-            (SELECT COUNT(*) FROM Dim_Product) AS total_products,
-            (SELECT COUNT(*) FROM Fact_Reviews) AS total_reviews,
-            (SELECT COUNT(*) FROM Dim_Topic) AS total_topics,
-            (SELECT ROUND(AVG(Star_Rating)::numeric, 2) FROM Fact_Reviews) AS average_rating,
-            (SELECT ROUND(AVG(Topic_Confidence)::numeric, 4) FROM Fact_Reviews) AS average_topic_confidence
+            (SELECT COUNT(*) FROM dim_product) AS total_products,
+            (SELECT COUNT(*) FROM fact_reviews) AS total_reviews,
+            (SELECT COUNT(*) FROM dim_topic) AS total_topics,
+            (SELECT ROUND(AVG(star_rating)::numeric, 2) FROM fact_reviews) AS average_rating,
+            (SELECT ROUND(AVG(topic_confidence)::numeric, 4) FROM fact_reviews) AS average_topic_confidence
     """
     return run_query(query).iloc[0]
 
@@ -149,15 +183,15 @@ def load_executive_kpis() -> pd.Series:
 def load_topic_distribution() -> pd.DataFrame:
     query = """
         SELECT
-            t.Topic_Name AS "Topic_Label",
-            COUNT(*) AS "Review_Count",
-            ROUND(AVG(f.Topic_Confidence)::numeric, 4) AS "Avg_Confidence",
-            ROUND(AVG(f.Star_Rating)::numeric, 2) AS "Avg_Rating"
-        FROM Fact_Reviews AS f
-        INNER JOIN Dim_Topic AS t
-            ON f.Topic_Key = t.Topic_Key
-        GROUP BY t.Topic_Name
-        ORDER BY "Review_Count" DESC, "Topic_Label"
+            t.topic_name AS topic_label,
+            COUNT(*) AS review_count,
+            ROUND(AVG(f.topic_confidence)::numeric, 4) AS avg_confidence,
+            ROUND(AVG(f.star_rating)::numeric, 2) AS avg_rating
+        FROM fact_reviews AS f
+        INNER JOIN dim_topic AS t
+            ON f.topic_key = t.topic_key
+        GROUP BY t.topic_name
+        ORDER BY review_count DESC, topic_label
     """
     return run_query(query)
 
@@ -165,26 +199,26 @@ def load_topic_distribution() -> pd.DataFrame:
 def load_pricing_snapshot() -> pd.DataFrame:
     query = """
         SELECT
-            p.Product_Name AS "Product_Name",
-            p.Current_Price AS "Current_Price",
-            ROUND(AVG(f.Star_Rating)::numeric, 2) AS "Avg_Rating",
-            COUNT(f.Review_Key) AS "Review_Count",
-            MAX(t.Topic_Name) AS "Topic_Label"
-        FROM Dim_Product AS p
-        LEFT JOIN Fact_Reviews AS f
-            ON p.Product_Key = f.Product_Key
-        LEFT JOIN Dim_Topic AS t
-            ON f.Topic_Key = t.Topic_Key
-        GROUP BY p.Product_Key, p.Product_Name, p.Current_Price
-        ORDER BY "Current_Price" DESC, "Product_Name"
+            p.product_name AS product_name,
+            p.current_price AS current_price,
+            ROUND(AVG(f.star_rating)::numeric, 2) AS avg_rating,
+            COUNT(f.review_key) AS review_count,
+            MAX(t.topic_name) AS topic_label
+        FROM dim_product AS p
+        LEFT JOIN fact_reviews AS f
+            ON p.product_key = f.product_key
+        LEFT JOIN dim_topic AS t
+            ON f.topic_key = t.topic_key
+        GROUP BY p.product_key, p.product_name, p.current_price
+        ORDER BY current_price DESC, product_name
     """
     return run_query(query)
 
 
 def load_last_refresh() -> str:
     query = """
-        SELECT COALESCE(MAX(Load_Timestamp)::text, 'Unavailable') AS last_refresh
-        FROM Fact_Reviews
+        SELECT COALESCE(MAX(load_timestamp)::text, 'Unavailable') AS last_refresh
+        FROM fact_reviews
     """
     return str(run_query(query).iloc[0]["last_refresh"])
 
@@ -215,10 +249,27 @@ def sidebar() -> str:
         )
 
         st.divider()
+        with st.form("pipeline_runner_form"):
+            product_category = st.text_input("Enter Product Category", value="wireless earbuds")
+            submitted = st.form_submit_button("Run Intelligence Pipeline")
+
+        if submitted:
+            try:
+                run_pipeline(product_category)
+            except subprocess.CalledProcessError as exc:
+                st.error("The intelligence pipeline failed during execution.")
+                if exc.stderr:
+                    st.code(exc.stderr)
+                elif exc.stdout:
+                    st.code(exc.stdout)
+            except Exception as exc:
+                st.error(f"Unable to run the intelligence pipeline: {exc}")
+
+        st.divider()
         st.markdown("### Warehouse Status")
         st.caption("Database: `PostgreSQL via st.secrets[\"DATABASE_URL\"]`")
         st.caption(f"Last refresh: `{load_last_refresh()}`")
-        st.caption("Source tables: `Dim_Product`, `Dim_Topic`, `Fact_Reviews`")
+        st.caption("Source tables: `dim_product`, `dim_topic`, `fact_reviews`")
 
     return page
 
@@ -249,15 +300,15 @@ def render_executive_summary() -> None:
             "This view aggregates the fact table by topic label so portfolio reviewers can see that the frontend is now reading directly from the star schema instead of using mock objects."
         )
 
-        chart_df = topic_df.sort_values("Review_Count", ascending=True)
+        chart_df = topic_df.sort_values("review_count", ascending=True)
         fig = px.bar(
             chart_df,
-            x="Review_Count",
-            y="Topic_Label",
-            color="Avg_Confidence",
+            x="review_count",
+            y="topic_label",
+            color="avg_confidence",
             orientation="h",
             color_continuous_scale="Blues",
-            text="Review_Count",
+            text="review_count",
         )
         fig.update_traces(textposition="outside")
         fig.update_layout(
@@ -276,25 +327,25 @@ def render_executive_summary() -> None:
         st.subheader("Strategic Signals")
 
         top_topic = topic_df.iloc[0]
-        most_confident_topic = topic_df.sort_values("Avg_Confidence", ascending=False).iloc[0]
+        most_confident_topic = topic_df.sort_values("avg_confidence", ascending=False).iloc[0]
         priciest_product = pricing_df.iloc[0]
 
         render_insight_card(
             "Most Discussed Topic",
-            str(top_topic["Topic_Label"]),
-            f"{int(top_topic['Review_Count'])} reviews mapped to this theme in Fact_Reviews.",
+            str(top_topic["topic_label"]),
+            f"{int(top_topic['review_count'])} reviews mapped to this theme in fact_reviews.",
         )
         st.write("")
         render_insight_card(
             "Highest Model Confidence",
-            str(most_confident_topic["Topic_Label"]),
-            f"Average topic confidence is {float(most_confident_topic['Avg_Confidence']) * 100:.1f}% across assigned reviews.",
+            str(most_confident_topic["topic_label"]),
+            f"Average topic confidence is {float(most_confident_topic['avg_confidence']) * 100:.1f}% across assigned reviews.",
         )
         st.write("")
         render_insight_card(
             "Highest Current Price",
-            f"{str(priciest_product['Product_Name'])} (${float(priciest_product['Current_Price']):.2f})",
-            "This is sourced directly from Dim_Product and reflects the latest price snapshot currently stored in the warehouse.",
+            f"{str(priciest_product['product_name'])} (${float(priciest_product['current_price']):.2f})",
+            "This is sourced directly from dim_product and reflects the latest price snapshot currently stored in the warehouse.",
         )
 
 
@@ -303,7 +354,7 @@ def render_consumer_sentiment() -> None:
 
     page_header(
         "Consumer Sentiment",
-        "Live NLP topic aggregation from the PostgreSQL warehouse, built by joining Fact_Reviews and Dim_Topic.",
+        "Live NLP topic aggregation from the PostgreSQL warehouse, built by joining fact_reviews and dim_topic.",
     )
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -311,11 +362,11 @@ def render_consumer_sentiment() -> None:
 
     fig = px.bar(
         topic_df,
-        x="Topic_Label",
-        y="Review_Count",
-        color="Topic_Label",
-        text="Review_Count",
-        custom_data=["Avg_Confidence", "Avg_Rating"],
+        x="topic_label",
+        y="review_count",
+        color="topic_label",
+        text="review_count",
+        custom_data=["avg_confidence", "avg_rating"],
         color_discrete_sequence=["#1d4ed8", "#0f766e", "#f97316", "#dc2626", "#7c3aed"],
     )
     fig.update_traces(
@@ -343,19 +394,19 @@ def render_consumer_sentiment() -> None:
     col1, col2, col3 = st.columns(3)
 
     most_discussed = topic_df.iloc[0]
-    highest_confidence = topic_df.sort_values("Avg_Confidence", ascending=False).iloc[0]
-    highest_rated = topic_df.sort_values("Avg_Rating", ascending=False).iloc[0]
+    highest_confidence = topic_df.sort_values("avg_confidence", ascending=False).iloc[0]
+    highest_rated = topic_df.sort_values("avg_rating", ascending=False).iloc[0]
 
-    col1.metric("Most Discussed Topic", str(most_discussed["Topic_Label"]), f"{int(most_discussed['Review_Count'])} reviews")
+    col1.metric("Most Discussed Topic", str(most_discussed["topic_label"]), f"{int(most_discussed['review_count'])} reviews")
     col2.metric(
         "Highest Avg Confidence",
-        str(highest_confidence["Topic_Label"]),
-        f"{float(highest_confidence['Avg_Confidence']) * 100:.1f}%",
+        str(highest_confidence["topic_label"]),
+        f"{float(highest_confidence['avg_confidence']) * 100:.1f}%",
     )
     col3.metric(
         "Highest Avg Rating",
-        str(highest_rated["Topic_Label"]),
-        f"{float(highest_rated['Avg_Rating']):.2f} stars",
+        str(highest_rated["topic_label"]),
+        f"{float(highest_rated['avg_rating']):.2f} stars",
     )
 
     st.dataframe(topic_df, use_container_width=True, hide_index=True)
@@ -366,26 +417,26 @@ def render_pricing_intelligence() -> None:
 
     page_header(
         "Pricing Intelligence",
-        "Live pricing snapshot from Dim_Product. A historical trend line can be added later by introducing a dedicated price history fact table.",
+        "Live pricing snapshot from dim_product. A historical trend line can be added later by introducing a dedicated price history fact table.",
     )
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Average Listed Price", f"${pricing_df['Current_Price'].mean():.2f}")
-    col2.metric("Highest Listed Price", f"${pricing_df['Current_Price'].max():.2f}")
-    col3.metric("Lowest Listed Price", f"${pricing_df['Current_Price'].min():.2f}")
+    col1.metric("Average Listed Price", f"${pricing_df['current_price'].mean():.2f}")
+    col2.metric("Highest Listed Price", f"${pricing_df['current_price'].max():.2f}")
+    col3.metric("Lowest Listed Price", f"${pricing_df['current_price'].min():.2f}")
 
     st.write("")
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Current Product Price Snapshot")
 
     fig = px.bar(
-        pricing_df.sort_values("Current_Price", ascending=False),
-        x="Product_Name",
-        y="Current_Price",
-        color="Avg_Rating",
+        pricing_df.sort_values("current_price", ascending=False),
+        x="product_name",
+        y="current_price",
+        color="avg_rating",
         color_continuous_scale="Tealgrn",
-        text="Current_Price",
-        custom_data=["Topic_Label", "Review_Count"],
+        text="current_price",
+        custom_data=["topic_label", "review_count"],
     )
     fig.update_traces(
         texttemplate="$%{y:.2f}",
@@ -428,7 +479,7 @@ def main() -> None:
     except (KeyError, SQLAlchemyError) as exc:
         st.error(str(exc))
         st.info(
-            "Configure `DATABASE_URL` in Streamlit secrets and run `python3 src/db_connector.py` to load the PostgreSQL warehouse."
+            "Configure `DATABASE_URL` in Streamlit secrets and run the intelligence pipeline to load the PostgreSQL warehouse."
         )
     except Exception as exc:
         st.error(f"Unable to load dashboard data: {exc}")
