@@ -20,7 +20,6 @@ st.set_page_config(
 )
 
 APP_ROOT = Path(__file__).resolve().parent
-LOGO_PATH = APP_ROOT / "assets" / "ci_logo.svg"
 
 def apply_theme() -> None:
     st.markdown(
@@ -108,24 +107,6 @@ def apply_theme() -> None:
                 margin-bottom: 0;
                 line-height: 1.7;
             }
-            .brand-shell {
-                background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 18px;
-                padding: 0.85rem 0.95rem;
-                margin-bottom: 1rem;
-            }
-            .brand-title {
-                color: #f8fafc;
-                font-size: 1.1rem;
-                font-weight: 700;
-                margin-bottom: 0.2rem;
-            }
-            .brand-subtitle {
-                color: rgba(248, 250, 252, 0.76);
-                font-size: 0.88rem;
-                margin-bottom: 0;
-            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -204,47 +185,70 @@ def load_pricing_snapshot() -> pd.DataFrame:
     """
     return run_query(query)
 
+
+def load_export_results() -> pd.DataFrame:
+    query = """
+        SELECT
+            p.product_name AS "Product Name",
+            p.current_price AS "Current Price",
+            f.review_text AS "Review Text",
+            f.star_rating AS "Star Rating",
+            t.topic_name AS "Topic Label",
+            ROUND(CAST(f.topic_confidence AS numeric), 4) AS "Topic Confidence",
+            f.load_timestamp AS "Load Timestamp"
+        FROM fact_reviews AS f
+        INNER JOIN dim_product AS p ON f.product_key = p.product_key
+        INNER JOIN dim_topic AS t ON f.topic_key = t.topic_key
+        ORDER BY f.load_timestamp DESC, p.product_name
+    """
+    return run_query(query)
+
+
+def clear_current_results() -> None:
+    engine = get_engine()
+    with engine.begin() as conn:
+        table_checks = {
+            "fact_reviews": conn.execute(text("SELECT to_regclass('fact_reviews')")).scalar(),
+            "dim_product": conn.execute(text("SELECT to_regclass('dim_product')")).scalar(),
+            "dim_topic": conn.execute(text("SELECT to_regclass('dim_topic')")).scalar(),
+        }
+
+        tables_to_clear = [table_name for table_name, exists in table_checks.items() if exists]
+        if tables_to_clear:
+            conn.execute(text(f"TRUNCATE TABLE {', '.join(tables_to_clear)} RESTART IDENTITY CASCADE"))
+
+    for file_path in [
+        APP_ROOT / "data" / "raw" / "raw_scraped_data.csv",
+        APP_ROOT / "data" / "processed" / "analyzed_reviews.csv",
+    ]:
+        if file_path.exists():
+            file_path.unlink()
+
 # ==========================================
 # 3. SIDEBAR & PIPELINE ORCHESTRATOR
 # ==========================================
 def initialize_page_state() -> None:
     if "selected_page" not in st.session_state:
         st.session_state["selected_page"] = "Home"
+    if "pipeline_url_input" not in st.session_state:
+        st.session_state["pipeline_url_input"] = ""
 
 
 def render_navigation_buttons() -> str:
-    current_page = st.session_state["selected_page"]
     st.markdown("### Navigation")
 
     for page_name in PAGES:
-        is_active = current_page == page_name
+        is_active = st.session_state["selected_page"] == page_name
         if st.button(page_name, key=f"nav_{page_name.lower().replace(' ', '_')}", use_container_width=True, type="primary" if is_active else "secondary"):
             st.session_state["selected_page"] = page_name
+            st.rerun()
 
     return st.session_state["selected_page"]
 
-
-def render_sidebar_brand() -> None:
-    st.markdown('<div class="brand-shell">', unsafe_allow_html=True)
-    if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), width=130)
-    else:
-        st.markdown(
-            """
-            <div style="font-size: 2.2rem; font-weight: 800; color: #67e8f9; line-height: 1; margin-bottom: 0.45rem;">
-                Ci
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    st.markdown('<div class="brand-title">Consumer Intelligence</div>', unsafe_allow_html=True)
-    st.markdown('<p class="brand-subtitle">End-to-End Cloud Data Pipeline</p>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
 def render_sidebar() -> str:
     with st.sidebar:
-        render_sidebar_brand()
+        st.markdown("## Consumer Intelligence")
+        st.caption("End-to-End Cloud Data Pipeline")
         st.divider()
 
         page = render_navigation_buttons()
@@ -252,7 +256,7 @@ def render_sidebar() -> str:
 
         st.markdown("### 🚀 Run Product Test")
         with st.form("pipeline_form"):
-            url_input = st.text_input("Enter Retailer URL", placeholder="https://www.amazon.com/...")
+            url_input = st.text_input("Enter Retailer URL", key="pipeline_url_input", placeholder="https://www.amazon.com/...")
             submit = st.form_submit_button("Start Analysis")
 
             if submit:
@@ -294,6 +298,33 @@ def render_sidebar() -> str:
                         st.rerun()
                 else:
                     st.warning("Please enter a valid URL first!")
+
+        st.write("")
+        if st.button("Refresh for Next URL", use_container_width=True):
+            with st.spinner("Clearing current dashboard data..."):
+                clear_current_results()
+            st.session_state["pipeline_url_input"] = ""
+            st.session_state["selected_page"] = "Home"
+            st.cache_data.clear()
+            st.rerun()
+
+        st.divider()
+        st.markdown("### Download Results")
+        try:
+            export_df = load_export_results()
+        except Exception:
+            export_df = pd.DataFrame()
+
+        if export_df.empty:
+            st.caption("Run the pipeline first to unlock CSV download.")
+        else:
+            st.download_button(
+                "Download Latest Results",
+                data=export_df.to_csv(index=False),
+                file_name="consumer_intelligence_results.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
     return page
 
 # ==========================================
@@ -392,7 +423,6 @@ def render_home_page() -> None:
             )
 
     with warning_tab:
-        st.warning("The following retailer links will not work on this demo site.")
         st.markdown("### Suggested Test URLs for Reviewers")
 
         st.markdown("**1. The Sandbox Sites (100% Success Rate)**")
@@ -409,9 +439,10 @@ def render_home_page() -> None:
 
         st.markdown("**3. The High-Stakes Test (Enterprise Marketplaces)**")
         st.caption("Large marketplaces often use aggressive anti-bot services such as Datadome or Cloudflare. The pipeline includes realistic headers, but cloud-hosted IPs can still be rate-limited or blocked.")
-        st.markdown("Amazon (Gigabyte Monitor)")
+        st.markdown("Amazon")
         st.code("https://www.amazon.com", language=None)
 
+        st.warning("The following retailer links will not work on this demo site.")
         st.markdown(
             """
             <div class="section-card">
