@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
-from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -19,8 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-APP_ROOT = Path(__file__).resolve().parent
-
 def apply_theme() -> None:
     st.markdown(
         """
@@ -35,7 +32,7 @@ def apply_theme() -> None:
                 border-radius: 12px;
             }
             section[data-testid="stSidebar"] div[data-baseweb="input"] input::placeholder {
-                color: #475569 !important;
+                color: #94a3b8 !important;
                 opacity: 1;
             }
             section[data-testid="stSidebar"] div.stButton > button,
@@ -106,6 +103,31 @@ def apply_theme() -> None:
                 color: #334155;
                 margin-bottom: 0;
                 line-height: 1.7;
+            }
+            .sidebar-title {
+                color: #f8fafc;
+                font-size: 1.28rem;
+                font-weight: 700;
+                margin-bottom: 0.08rem;
+                line-height: 1.15;
+            }
+            .sidebar-subtitle {
+                color: rgba(248, 250, 252, 0.72);
+                font-size: 0.83rem;
+                margin-bottom: 0.45rem;
+                line-height: 1.35;
+            }
+            .sidebar-rule {
+                border: 0;
+                border-top: 1px solid rgba(255, 255, 255, 0.12);
+                margin: 0.45rem 0 0.6rem 0;
+            }
+            .sidebar-section-heading {
+                color: #e2e8f0;
+                font-size: 0.94rem;
+                font-weight: 700;
+                margin: 0.1rem 0 0.35rem 0;
+                line-height: 1.2;
             }
         </style>
         """,
@@ -204,25 +226,8 @@ def load_export_results() -> pd.DataFrame:
     return run_query(query)
 
 
-def clear_current_results() -> None:
-    engine = get_engine()
-    with engine.begin() as conn:
-        table_checks = {
-            "fact_reviews": conn.execute(text("SELECT to_regclass('fact_reviews')")).scalar(),
-            "dim_product": conn.execute(text("SELECT to_regclass('dim_product')")).scalar(),
-            "dim_topic": conn.execute(text("SELECT to_regclass('dim_topic')")).scalar(),
-        }
-
-        tables_to_clear = [table_name for table_name, exists in table_checks.items() if exists]
-        if tables_to_clear:
-            conn.execute(text(f"TRUNCATE TABLE {', '.join(tables_to_clear)} RESTART IDENTITY CASCADE"))
-
-    for file_path in [
-        APP_ROOT / "data" / "raw" / "raw_scraped_data.csv",
-        APP_ROOT / "data" / "processed" / "analyzed_reviews.csv",
-    ]:
-        if file_path.exists():
-            file_path.unlink()
+def dashboard_view_is_cleared() -> bool:
+    return st.session_state.get("dashboard_cleared", False)
 
 # ==========================================
 # 3. SIDEBAR & PIPELINE ORCHESTRATOR
@@ -232,11 +237,11 @@ def initialize_page_state() -> None:
         st.session_state["selected_page"] = "Home"
     if "pipeline_url_input" not in st.session_state:
         st.session_state["pipeline_url_input"] = ""
+    if "dashboard_cleared" not in st.session_state:
+        st.session_state["dashboard_cleared"] = False
 
 
 def render_navigation_buttons() -> str:
-    st.markdown("### Navigation")
-
     for page_name in PAGES:
         is_active = st.session_state["selected_page"] == page_name
         if st.button(page_name, key=f"nav_{page_name.lower().replace(' ', '_')}", use_container_width=True, type="primary" if is_active else "secondary"):
@@ -247,16 +252,22 @@ def render_navigation_buttons() -> str:
 
 def render_sidebar() -> str:
     with st.sidebar:
-        st.markdown("## Consumer Intelligence")
-        st.caption("End-to-End Cloud Data Pipeline")
-        st.divider()
+        st.markdown('<div class="sidebar-title">Consumer Intelligence</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-subtitle">End-to-End Cloud Data Pipeline</div>', unsafe_allow_html=True)
+        st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
 
+        st.markdown('<div class="sidebar-section-heading">Navigation</div>', unsafe_allow_html=True)
         page = render_navigation_buttons()
-        st.divider()
+        st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
 
-        st.markdown("### 🚀 Run Product Test")
+        st.markdown('<div class="sidebar-section-heading">Run Product Test</div>', unsafe_allow_html=True)
         with st.form("pipeline_form"):
-            url_input = st.text_input("Enter Retailer URL", key="pipeline_url_input", placeholder="https://www.amazon.com/...")
+            url_input = st.text_input(
+                "Enter Retailer URL",
+                key="pipeline_url_input",
+                placeholder="Enter Retailer URL",
+                label_visibility="collapsed",
+            )
             submit = st.form_submit_button("Start Analysis")
 
             if submit:
@@ -292,6 +303,7 @@ def render_sidebar() -> str:
                             st.error(f"Database Error:\n{db_result.stderr}\n{db_result.stdout}")
                             st.stop()
 
+                        st.session_state["dashboard_cleared"] = False
                         st.success("Analysis Complete!")
                         st.balloons()
                         st.cache_data.clear()
@@ -301,30 +313,31 @@ def render_sidebar() -> str:
 
         st.write("")
         if st.button("Refresh for Next URL", use_container_width=True):
-            with st.spinner("Clearing current dashboard data..."):
-                clear_current_results()
             st.session_state["pipeline_url_input"] = ""
-            st.session_state["selected_page"] = "Home"
+            st.session_state["dashboard_cleared"] = True
             st.cache_data.clear()
             st.rerun()
 
-        st.divider()
-        st.markdown("### Download Results")
-        try:
-            export_df = load_export_results()
-        except Exception:
-            export_df = pd.DataFrame()
-
-        if export_df.empty:
-            st.caption("Run the pipeline first to unlock CSV download.")
+        st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-heading">Download Results</div>', unsafe_allow_html=True)
+        if dashboard_view_is_cleared():
+            st.caption("Run a new analysis to download the latest results.")
         else:
-            st.download_button(
-                "Download Latest Results",
-                data=export_df.to_csv(index=False),
-                file_name="consumer_intelligence_results.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+            try:
+                export_df = load_export_results()
+            except Exception:
+                export_df = pd.DataFrame()
+
+            if export_df.empty:
+                st.caption("Run the pipeline first to unlock CSV download.")
+            else:
+                st.download_button(
+                    "Download Latest Results",
+                    data=export_df.to_csv(index=False),
+                    file_name="consumer_intelligence_results.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
     return page
 
 # ==========================================
@@ -474,11 +487,36 @@ def render_empty_dashboard_state() -> None:
 
 
 def render_executive_summary() -> None:
+    page_header("Executive Summary", "Live leadership view of product coverage, review volume, topic mix, and pricing signals.")
+
+    if dashboard_view_is_cleared():
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Products In Catalog", "0")
+        col2.metric("Reviews In Warehouse", "0")
+        col3.metric("Tracked Topics", "0")
+        col4.metric("Avg Topic Confidence", "0.0%")
+
+        st.write("")
+        left, right = st.columns([1.4, 1])
+
+        with left:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.subheader("Live Topic Mix")
+            st.info("No live data is currently displayed. Paste a new URL and click Start Analysis to repopulate this view.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with right:
+            st.subheader("Strategic Signals")
+            render_insight_card("Most Discussed Topic", "-", "")
+            st.write("")
+            render_insight_card("Highest Model Confidence", "-", "")
+            st.write("")
+            render_insight_card("Highest Current Price", "-", "")
+        return
+
     kpis = load_executive_kpis()
     topic_df = load_topic_distribution()
     pricing_df = load_pricing_snapshot()
-
-    page_header("Executive Summary", "Live leadership view of product coverage, review volume, topic mix, and pricing signals.")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Products In Catalog", f"{int(kpis['total_products']):,}")
@@ -522,8 +560,23 @@ def render_executive_summary() -> None:
             render_insight_card("Highest Current Price", f"{str(priciest_product['Product Name'])} (${float(priciest_product['Current Price']):.2f})", "Sourced from the product dimension.")
 
 def render_consumer_sentiment() -> None:
-    topic_df = load_topic_distribution()
     page_header("Consumer Sentiment", "Live NLP topic aggregation from the PostgreSQL warehouse.")
+
+    if dashboard_view_is_cleared():
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.subheader("Topic Distribution")
+        st.info("No sentiment results are currently displayed. Run a new analysis to generate topic-level review insights.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.write("")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Most Discussed Topic", "-", "0 reviews")
+        col2.metric("Highest Average Confidence", "-", "0.0%")
+        col3.metric("Highest Average Rating", "-", "0.00 stars")
+        st.dataframe(pd.DataFrame(columns=["Topic Label", "Review Count", "Average Confidence", "Average Rating"]), use_container_width=True, hide_index=True)
+        return
+
+    topic_df = load_topic_distribution()
 
     if not topic_df.empty:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -554,8 +607,23 @@ def render_consumer_sentiment() -> None:
         st.dataframe(topic_df, use_container_width=True, hide_index=True)
 
 def render_pricing_intelligence() -> None:
-    pricing_df = load_pricing_snapshot()
     page_header("Pricing Intelligence", "Live pricing snapshot from dim_product.")
+
+    if dashboard_view_is_cleared():
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Average Listed Price", "$0.00")
+        col2.metric("Highest Listed Price", "$0.00")
+        col3.metric("Lowest Listed Price", "$0.00")
+
+        st.write("")
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.subheader("Current Product Price Snapshot")
+        st.info("No pricing snapshot is currently displayed. Run a new analysis to compare the next product set.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame(columns=["Product Name", "Current Price", "Average Rating", "Review Count", "Topic Label"]), use_container_width=True, hide_index=True)
+        return
+
+    pricing_df = load_pricing_snapshot()
 
     if not pricing_df.empty:
         col1, col2, col3 = st.columns(3)
