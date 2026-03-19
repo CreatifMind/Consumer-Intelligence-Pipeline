@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
-from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -26,6 +25,34 @@ def apply_theme() -> None:
             .stApp { background: radial-gradient(circle at top left, rgba(18, 83, 137, 0.12), transparent 28%), linear-gradient(180deg, #f4f7fb 0%, #eef3f8 100%); }
             section[data-testid="stSidebar"] { background: linear-gradient(180deg, #0f172a 0%, #172554 100%); border-right: 1px solid rgba(255, 255, 255, 0.08); }
             section[data-testid="stSidebar"] * { color: #f8fafc; }
+            section[data-testid="stSidebar"] div[data-baseweb="input"] input {
+                color: #0f172a !important;
+                -webkit-text-fill-color: #0f172a !important;
+                background: #ffffff !important;
+                border-radius: 12px;
+            }
+            section[data-testid="stSidebar"] div[data-baseweb="input"] input::placeholder {
+                color: #475569 !important;
+                opacity: 1;
+            }
+            section[data-testid="stSidebar"] div.stButton > button {
+                width: 100%;
+                border-radius: 12px;
+                border: 1px solid rgba(148, 163, 184, 0.32);
+                background: rgba(255, 255, 255, 0.94);
+                color: #0f172a !important;
+                font-weight: 600;
+            }
+            section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+                background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+                color: #0f172a !important;
+                border-color: rgba(59, 130, 246, 0.45);
+                box-shadow: 0 10px 22px rgba(15, 23, 42, 0.16);
+            }
+            section[data-testid="stSidebar"] div.stButton > button:hover {
+                border-color: rgba(59, 130, 246, 0.48);
+                color: #0f172a !important;
+            }
             .block-container { padding-top: 2rem; padding-bottom: 2rem; }
             .hero-card { padding: 1.5rem 1.75rem; border-radius: 20px; background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%); color: #ffffff; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18); margin-bottom: 1.5rem; }
             .hero-title { font-size: 2rem; font-weight: 700; margin-bottom: 0.35rem; letter-spacing: -0.02em; }
@@ -36,6 +63,36 @@ def apply_theme() -> None:
             .insight-value { color: #0f172a; font-size: 1.4rem; font-weight: 700; margin-bottom: 0.45rem; }
             .insight-copy { color: #334155; font-size: 0.95rem; margin-bottom: 0; }
             div[data-testid="stMetric"] { background: rgba(255, 255, 255, 0.88); border: 1px solid rgba(148, 163, 184, 0.18); padding: 1rem; border-radius: 18px; box-shadow: 0 14px 28px rgba(15, 23, 42, 0.06); }
+            .empty-state {
+                max-width: 860px;
+                margin: 5rem auto 0 auto;
+                padding: 2.25rem 2.4rem;
+                border-radius: 22px;
+                background: rgba(255, 255, 255, 0.92);
+                box-shadow: 0 18px 36px rgba(15, 23, 42, 0.08);
+            }
+            .home-copy {
+                color: #334155;
+                font-size: 1rem;
+                line-height: 1.75;
+            }
+            .architecture-step {
+                background: rgba(255, 255, 255, 0.9);
+                border: 1px solid rgba(148, 163, 184, 0.16);
+                border-radius: 18px;
+                padding: 1.15rem 1.2rem;
+                box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05);
+                min-height: 210px;
+            }
+            .architecture-step h4 {
+                margin-bottom: 0.55rem;
+                color: #0f172a;
+            }
+            .architecture-step p {
+                color: #334155;
+                margin-bottom: 0;
+                line-height: 1.7;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -46,6 +103,14 @@ def page_header(title: str, subtitle: str) -> None:
 
 def render_insight_card(label: str, value: str, body: str) -> None:
     st.markdown(f'<div class="insight-card"><div class="insight-label">{label}</div><div class="insight-value">{value}</div><p class="insight-copy">{body}</p></div>', unsafe_allow_html=True)
+
+
+PAGES = [
+    "Home",
+    "Executive Summary",
+    "Consumer Sentiment",
+    "Pricing Intelligence",
+]
 
 # ==========================================
 # 2. DATABASE & QUERIES (PostgreSQL)
@@ -79,25 +144,25 @@ def load_executive_kpis() -> pd.Series:
 def load_topic_distribution() -> pd.DataFrame:
     query = """
         SELECT
-            t.topic_name AS "Topic_Label",
-            COUNT(*) AS "Review_Count",
-            ROUND(CAST(AVG(f.topic_confidence) AS numeric), 4) AS "Avg_Confidence",
-            ROUND(CAST(AVG(f.star_rating) AS numeric), 2) AS "Avg_Rating"
+            t.topic_name AS "Topic Label",
+            COUNT(*) AS "Review Count",
+            ROUND(CAST(AVG(f.topic_confidence) AS numeric), 4) AS "Average Confidence",
+            ROUND(CAST(AVG(f.star_rating) AS numeric), 2) AS "Average Rating"
         FROM fact_reviews AS f
         INNER JOIN dim_topic AS t ON f.topic_key = t.topic_key
         GROUP BY t.topic_name
-        ORDER BY "Review_Count" DESC, t.topic_name
+        ORDER BY "Review Count" DESC, t.topic_name
     """
     return run_query(query)
 
 def load_pricing_snapshot() -> pd.DataFrame:
     query = """
         SELECT
-            p.product_name AS "Product_Name",
-            p.current_price AS "Current_Price",
-            ROUND(CAST(AVG(f.star_rating) AS numeric), 2) AS "Avg_Rating",
-            COUNT(f.review_key) AS "Review_Count",
-            MAX(t.topic_name) AS "Topic_Label"
+            p.product_name AS "Product Name",
+            p.current_price AS "Current Price",
+            ROUND(CAST(AVG(f.star_rating) AS numeric), 2) AS "Average Rating",
+            COUNT(f.review_key) AS "Review Count",
+            MAX(t.topic_name) AS "Topic Label"
         FROM dim_product AS p
         LEFT JOIN fact_reviews AS f ON p.product_key = f.product_key
         LEFT JOIN dim_topic AS t ON f.topic_key = t.topic_key
@@ -109,18 +174,35 @@ def load_pricing_snapshot() -> pd.DataFrame:
 # ==========================================
 # 3. SIDEBAR & PIPELINE ORCHESTRATOR
 # ==========================================
+def initialize_page_state() -> None:
+    if "selected_page" not in st.session_state:
+        st.session_state["selected_page"] = "Home"
+
+
+def render_navigation_buttons() -> str:
+    current_page = st.session_state["selected_page"]
+    st.markdown("### Navigation")
+
+    for page_name in PAGES:
+        is_active = current_page == page_name
+        if st.button(page_name, key=f"nav_{page_name.lower().replace(' ', '_')}", use_container_width=True, type="primary" if is_active else "secondary"):
+            st.session_state["selected_page"] = page_name
+
+    return st.session_state["selected_page"]
+
+
 def render_sidebar() -> str:
     with st.sidebar:
         st.markdown("## Consumer Intelligence")
         st.caption("End-to-End Cloud Data Pipeline")
         st.divider()
 
-        page = st.radio("Navigation", ["Executive Summary", "Consumer Sentiment", "Pricing Intelligence"])
+        page = render_navigation_buttons()
         st.divider()
 
         st.markdown("### 🚀 Run Product Test")
         with st.form("pipeline_form"):
-            url_input = st.text_input("Enter Retail URL", placeholder="https://books.toscrape.com/...")
+            url_input = st.text_input("Enter Retailer URL", placeholder="https://www.amazon.com/...")
             submit = st.form_submit_button("Start Analysis")
 
             if submit:
@@ -167,6 +249,129 @@ def render_sidebar() -> str:
 # ==========================================
 # 4. PAGE RENDERS
 # ==========================================
+def render_home_page() -> None:
+    page_header(
+        "Consumer Intelligence Pipeline",
+        "An end-to-end, cloud-hosted data pipeline and leadership dashboard for live consumer sentiment and pricing intelligence.",
+    )
+
+    overview_tab, architecture_tab, warning_tab = st.tabs(["Overview", "Architecture", "Demo Limitations"])
+
+    with overview_tab:
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown("### Project Title")
+        st.markdown('<p class="home-copy"><strong>Consumer Intelligence Pipeline</strong></p>', unsafe_allow_html=True)
+        st.markdown("### What It Is")
+        st.markdown(
+            """
+            <p class="home-copy">
+                An end-to-end, cloud-hosted data pipeline and interactive dashboard that automates the extraction,
+                natural language processing (NLP), and visualization of retail product data. It is designed to give
+                business leaders a real-time, quantitative view of consumer sentiment and pricing intelligence without
+                requiring manual data entry.
+            </p>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.info("Paste a supported product link into the sidebar and click Start Analysis to populate the live dashboard.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with architecture_tab:
+        first_row = st.columns(2)
+        second_row = st.columns(2)
+
+        with first_row[0]:
+            st.markdown(
+                """
+                <div class="architecture-step">
+                    <h4>Step 1: Dynamic Data Extraction (Python / BeautifulSoup)</h4>
+                    <p>
+                        The pipeline features a "Universal Scraper" that accepts retail URLs. It bypasses basic anti-bot
+                        measures to extract product titles, current pricing, and raw consumer review text. It includes
+                        intelligent fallback routing to handle varying HTML structures (like Shopify or standard SSR sites)
+                        and sparse data scenarios.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with first_row[1]:
+            st.markdown(
+                """
+                <div class="architecture-step">
+                    <h4>Step 2: Machine Learning & NLP (Scikit-Learn)</h4>
+                    <p>
+                        Raw text is normalized and passed through a Latent Dirichlet Allocation (LDA) model. The algorithm
+                        mathematically groups words to assign each review to a core business topic (Quality, Pricing, or
+                        Delivery) and calculates a model confidence score.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with second_row[0]:
+            st.markdown(
+                """
+                <div class="architecture-step">
+                    <h4>Step 3: Cloud Data Warehousing (PostgreSQL / SQLAlchemy)</h4>
+                    <p>
+                        The processed data is structurally transformed and loaded into a cloud-hosted PostgreSQL database.
+                        The data is organized into a classic Star Schema (Fact and Dimension tables) utilizing TRUNCATE
+                        logic to ensure the dashboard always reflects the most current product snapshot.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with second_row[1]:
+            st.markdown(
+                """
+                <div class="architecture-step">
+                    <h4>Step 4: Real-Time Visualization (Streamlit / Plotly)</h4>
+                    <p>
+                        The frontend acts as a live leadership dashboard. It executes direct SQL queries against the cloud
+                        warehouse to render interactive charts, displaying aggregate review volume, topic distribution,
+                        sentiment confidence, and a live pricing snapshot.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    with warning_tab:
+        st.warning("The following retailer links will not work on this demo site.")
+        st.markdown(
+            """
+            <div class="section-card">
+                <p class="home-copy"><strong>Unsupported Demo Sources</strong></p>
+                <p class="home-copy">Shopee & Lazada</p>
+                <p class="home-copy">Walmart & Target</p>
+                <p class="home-copy">AliExpress & Temu</p>
+                <p class="home-copy">Nike & Adidas</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_empty_dashboard_state() -> None:
+    st.markdown(
+        """
+        <div class="empty-state">
+            <h2 style="margin-top: 0; color: #0f172a; text-align: center;">Dashboard Waiting for First Run</h2>
+            <p style="margin-bottom: 0; color: #475569; font-size: 1.05rem; text-align: center; line-height: 1.8;">
+                The warehouse is still empty. Enter a supported product URL in the sidebar and click Start Analysis to
+                populate the dashboard with live intelligence.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_executive_summary() -> None:
     kpis = load_executive_kpis()
     topic_df = load_topic_distribution()
@@ -186,9 +391,17 @@ def render_executive_summary() -> None:
     with left:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("Live Topic Mix")
-        chart_df = topic_df.sort_values("Review_Count", ascending=True)
+        chart_df = topic_df.sort_values("Review Count", ascending=True)
         if not chart_df.empty:
-            fig = px.bar(chart_df, x="Review_Count", y="Topic_Label", color="Avg_Confidence", orientation="h", color_continuous_scale="Blues", text="Review_Count")
+            fig = px.bar(
+                chart_df,
+                x="Review Count",
+                y="Topic Label",
+                color="Average Confidence",
+                orientation="h",
+                color_continuous_scale="Blues",
+                text="Review Count",
+            )
             fig.update_traces(textposition="outside")
             fig.update_layout(height=360, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_title="Reviews", yaxis_title="")
             st.plotly_chart(fig, use_container_width=True)
@@ -198,14 +411,14 @@ def render_executive_summary() -> None:
         st.subheader("Strategic Signals")
         if not topic_df.empty and not pricing_df.empty:
             top_topic = topic_df.iloc[0]
-            most_confident_topic = topic_df.sort_values("Avg_Confidence", ascending=False).iloc[0]
+            most_confident_topic = topic_df.sort_values("Average Confidence", ascending=False).iloc[0]
             priciest_product = pricing_df.iloc[0]
 
-            render_insight_card("Most Discussed Topic", str(top_topic["Topic_Label"]), f"{int(top_topic['Review_Count'])} reviews mapped to this theme.")
+            render_insight_card("Most Discussed Topic", str(top_topic["Topic Label"]), f"{int(top_topic['Review Count'])} reviews mapped to this theme.")
             st.write("")
-            render_insight_card("Highest Model Confidence", str(most_confident_topic["Topic_Label"]), f"Avg confidence is {float(most_confident_topic['Avg_Confidence']) * 100:.1f}%.")
+            render_insight_card("Highest Model Confidence", str(most_confident_topic["Topic Label"]), f"Avg confidence is {float(most_confident_topic['Average Confidence']) * 100:.1f}%.")
             st.write("")
-            render_insight_card("Highest Current Price", f"{str(priciest_product['Product_Name'])} (${float(priciest_product['Current_Price']):.2f})", "Sourced from dim_product.")
+            render_insight_card("Highest Current Price", f"{str(priciest_product['Product Name'])} (${float(priciest_product['Current Price']):.2f})", "Sourced from the product dimension.")
 
 def render_consumer_sentiment() -> None:
     topic_df = load_topic_distribution()
@@ -214,7 +427,15 @@ def render_consumer_sentiment() -> None:
     if not topic_df.empty:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("Topic Distribution")
-        fig = px.bar(topic_df, x="Topic_Label", y="Review_Count", color="Topic_Label", text="Review_Count", custom_data=["Avg_Confidence", "Avg_Rating"], color_discrete_sequence=["#1d4ed8", "#0f766e", "#f97316", "#dc2626", "#7c3aed"])
+        fig = px.bar(
+            topic_df,
+            x="Topic Label",
+            y="Review Count",
+            color="Topic Label",
+            text="Review Count",
+            custom_data=["Average Confidence", "Average Rating"],
+            color_discrete_sequence=["#1d4ed8", "#0f766e", "#f97316", "#dc2626", "#7c3aed"],
+        )
         fig.update_traces(textposition="outside", hovertemplate="<b>%{x}</b><br>Reviews: %{y}<br>Avg confidence: %{customdata[0]:.2%}<br>Avg rating: %{customdata[1]:.2f}<extra></extra>")
         fig.update_layout(height=440, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
@@ -223,12 +444,12 @@ def render_consumer_sentiment() -> None:
         st.write("")
         col1, col2, col3 = st.columns(3)
         most_discussed = topic_df.iloc[0]
-        highest_confidence = topic_df.sort_values("Avg_Confidence", ascending=False).iloc[0]
-        highest_rated = topic_df.sort_values("Avg_Rating", ascending=False).iloc[0]
+        highest_confidence = topic_df.sort_values("Average Confidence", ascending=False).iloc[0]
+        highest_rated = topic_df.sort_values("Average Rating", ascending=False).iloc[0]
 
-        col1.metric("Most Discussed Topic", str(most_discussed["Topic_Label"]), f"{int(most_discussed['Review_Count'])} reviews")
-        col2.metric("Highest Avg Confidence", str(highest_confidence["Topic_Label"]), f"{float(highest_confidence['Avg_Confidence']) * 100:.1f}%")
-        col3.metric("Highest Avg Rating", str(highest_rated["Topic_Label"]), f"{float(highest_rated['Avg_Rating']):.2f} stars")
+        col1.metric("Most Discussed Topic", str(most_discussed["Topic Label"]), f"{int(most_discussed['Review Count'])} reviews")
+        col2.metric("Highest Average Confidence", str(highest_confidence["Topic Label"]), f"{float(highest_confidence['Average Confidence']) * 100:.1f}%")
+        col3.metric("Highest Average Rating", str(highest_rated["Topic Label"]), f"{float(highest_rated['Average Rating']):.2f} stars")
         st.dataframe(topic_df, use_container_width=True, hide_index=True)
 
 def render_pricing_intelligence() -> None:
@@ -237,17 +458,25 @@ def render_pricing_intelligence() -> None:
 
     if not pricing_df.empty:
         col1, col2, col3 = st.columns(3)
-        col1.metric("Average Listed Price", f"${pricing_df['Current_Price'].mean():.2f}")
-        col2.metric("Highest Listed Price", f"${pricing_df['Current_Price'].max():.2f}")
-        col3.metric("Lowest Listed Price", f"${pricing_df['Current_Price'].min():.2f}")
+        col1.metric("Average Listed Price", f"${pricing_df['Current Price'].mean():.2f}")
+        col2.metric("Highest Listed Price", f"${pricing_df['Current Price'].max():.2f}")
+        col3.metric("Lowest Listed Price", f"${pricing_df['Current Price'].min():.2f}")
 
         st.write("")
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.subheader("Current Product Price Snapshot")
 
-        fig = px.bar(pricing_df.sort_values("Current_Price", ascending=False), x="Product_Name", y="Current_Price", color="Avg_Rating", color_continuous_scale="Tealgrn", text="Current_Price", custom_data=["Topic_Label", "Review_Count"])
+        fig = px.bar(
+            pricing_df.sort_values("Current Price", ascending=False),
+            x="Product Name",
+            y="Current Price",
+            color="Average Rating",
+            color_continuous_scale="Tealgrn",
+            text="Current Price",
+            custom_data=["Topic Label", "Review Count"],
+        )
         fig.update_traces(texttemplate="$%{y:.2f}", textposition="outside", hovertemplate="<b>%{x}</b><br>Price: $%{y:.2f}<br>Avg rating: %{marker.color:.2f}<br>Topic: %{customdata[0]}<br>Reviews: %{customdata[1]}<extra></extra>")
-        fig.update_layout(height=460, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", coloraxis_colorbar_title="Avg Rating")
+        fig.update_layout(height=460, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", coloraxis_colorbar_title="Average Rating")
         st.plotly_chart(fig, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
         st.dataframe(pricing_df, use_container_width=True, hide_index=True)
@@ -257,19 +486,22 @@ def render_pricing_intelligence() -> None:
 # ==========================================
 def main() -> None:
     apply_theme()
+    initialize_page_state()
     selected_page = render_sidebar()
 
     try:
-        # Zero-State Logic
-        if check_if_empty():
-            st.info("👋 Welcome to the Consumer Intelligence Platform! The database is currently empty. Please enter a product URL in the sidebar to run your first analysis.")
+        warehouse_is_empty = check_if_empty()
+
+        if selected_page == "Home":
+            render_home_page()
+        elif warehouse_is_empty:
+            render_empty_dashboard_state()
+        elif selected_page == "Executive Summary":
+            render_executive_summary()
+        elif selected_page == "Consumer Sentiment":
+            render_consumer_sentiment()
         else:
-            if selected_page == "Executive Summary":
-                render_executive_summary()
-            elif selected_page == "Consumer Sentiment":
-                render_consumer_sentiment()
-            else:
-                render_pricing_intelligence()
+            render_pricing_intelligence()
     except Exception as e:
         st.error(f"Dashboard Error: {e}")
 
