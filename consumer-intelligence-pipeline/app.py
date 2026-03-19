@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -21,7 +20,10 @@ st.set_page_config(
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+APP_DIR = os.path.dirname(__file__)
+SRC_DIR = os.path.join(APP_DIR, "src")
+RAW_DIR = os.path.join(APP_DIR, "data", "raw")
+PROCESSED_DIR = os.path.join(APP_DIR, "data", "processed")
 
 
 def get_database_url() -> str:
@@ -144,22 +146,23 @@ def run_query(query: str) -> pd.DataFrame:
 
 def run_pipeline(product_category: str) -> None:
     """Run the scraper, NLP processor, and database loader sequentially."""
-    os.makedirs(PROJECT_ROOT / "data" / "raw", exist_ok=True)
-    os.makedirs(PROJECT_ROOT / "data" / "processed", exist_ok=True)
+    os.makedirs(RAW_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
 
     commands = [
-        [sys.executable, "src/scraper.py"],
-        [sys.executable, "src/nlp_processor.py"],
-        [sys.executable, "src/db_connector.py"],
+        [sys.executable, os.path.join(SRC_DIR, "scraper.py")],
+        [sys.executable, os.path.join(SRC_DIR, "nlp_processor.py")],
+        [sys.executable, os.path.join(SRC_DIR, "db_connector.py")],
     ]
     env = os.environ.copy()
     env["PRODUCT_CATEGORY"] = product_category.strip()
+    env["DATABASE_URL"] = get_database_url()
 
     with st.spinner("Extracting and analyzing data..."):
         for command in commands:
             completed = subprocess.run(
                 command,
-                cwd=PROJECT_ROOT,
+                cwd=APP_DIR,
                 env=env,
                 check=True,
                 capture_output=True,
@@ -168,8 +171,22 @@ def run_pipeline(product_category: str) -> None:
             if completed.stdout.strip():
                 st.session_state["latest_pipeline_log"] = completed.stdout.strip()
 
+    st.session_state["show_pipeline_balloons"] = True
+    st.session_state["pipeline_success_message"] = (
+        "Intelligence Gathered! The dashboard has been updated with live data."
+    )
     st.cache_data.clear()
     st.rerun()
+
+
+def show_pipeline_feedback() -> None:
+    """Display post-run success feedback once after the pipeline refresh."""
+    if st.session_state.pop("show_pipeline_balloons", False):
+        st.balloons()
+
+    success_message = st.session_state.pop("pipeline_success_message", "")
+    if success_message:
+        st.success(success_message)
 
 
 def load_executive_kpis() -> pd.Series:
@@ -486,6 +503,7 @@ def render_pricing_intelligence() -> None:
 
 def main() -> None:
     apply_theme()
+    show_pipeline_feedback()
 
     try:
         page = sidebar()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -22,6 +23,10 @@ REQUIRED_COLUMNS = {
 
 def get_database_url() -> str:
     """Read the PostgreSQL connection string from Streamlit secrets."""
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
+
     try:
         return st.secrets["DATABASE_URL"]
     except Exception as exc:
