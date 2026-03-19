@@ -136,9 +136,6 @@ def load_processed_reviews(csv_path: Path) -> pd.DataFrame:
 def refresh_dimensions(connection, reviews_df: pd.DataFrame) -> tuple[dict[str, int], dict[str, int]]:
     """
     Rebuild the dimension tables from the latest processed snapshot.
-
-    Keeping the dimensions aligned with the current CSV avoids stale products or topic
-    labels lingering in the warehouse after NLP topic definitions change.
     """
     product_dimension = (
         reviews_df[["product_name", "price"]]
@@ -153,9 +150,8 @@ def refresh_dimensions(connection, reviews_df: pd.DataFrame) -> tuple[dict[str, 
         .rename(columns={"Dominant_Topic": "topic_name"})
     )
 
-    connection.execute(text("DELETE FROM fact_reviews"))
-    connection.execute(text("DELETE FROM dim_product"))
-    connection.execute(text("DELETE FROM dim_topic"))
+    # SENIOR UPGRADE: TRUNCATE completely wipes the tables and resets ID counters to 1.
+    connection.execute(text("TRUNCATE TABLE fact_reviews, dim_product, dim_topic RESTART IDENTITY CASCADE"))
 
     connection.execute(
         text(
@@ -303,3 +299,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
