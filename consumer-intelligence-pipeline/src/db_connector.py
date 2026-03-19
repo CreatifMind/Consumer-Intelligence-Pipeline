@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys  # <-- Added the sys import here!
 from pathlib import Path
 
 import pandas as pd
@@ -286,12 +287,17 @@ def main() -> None:
             )
 
         print(f"[INFO] Database load complete. {len(fact_rows)} rows were inserted into fact_reviews.")
+    
+    # <-- Added sys.exit(1) to all error catches below! -->
     except FileNotFoundError:
         print(f"[ERROR] Processed input file not found: {input_path}")
+        sys.exit(1)
     except (KeyError, ValueError, SQLAlchemyError) as exc:
         print(f"[ERROR] Database load job failed: {exc}")
+        sys.exit(1)
     except Exception as exc:
         print(f"[ERROR] Unexpected database load failure: {exc}")
+        sys.exit(1)
     finally:
         if engine is not None:
             engine.dispose()
