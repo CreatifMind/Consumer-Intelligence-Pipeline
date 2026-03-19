@@ -144,18 +144,21 @@ def run_query(query: str) -> pd.DataFrame:
         return pd.read_sql_query(text(query), connection)
 
 
-def run_pipeline(product_category: str) -> None:
+def run_pipeline(user_url_input: str) -> None:
     """Run the scraper, NLP processor, and database loader sequentially."""
     os.makedirs(RAW_DIR, exist_ok=True)
     os.makedirs(PROCESSED_DIR, exist_ok=True)
 
+    scraper_command = [sys.executable, os.path.join(SRC_DIR, "scraper.py")]
+    if user_url_input.strip():
+        scraper_command.append(user_url_input.strip())
+
     commands = [
-        [sys.executable, os.path.join(SRC_DIR, "scraper.py")],
+        scraper_command,
         [sys.executable, os.path.join(SRC_DIR, "nlp_processor.py")],
         [sys.executable, os.path.join(SRC_DIR, "db_connector.py")],
     ]
     env = os.environ.copy()
-    env["PRODUCT_CATEGORY"] = product_category.strip()
     env["DATABASE_URL"] = get_database_url()
 
     with st.spinner("Extracting and analyzing data..."):
@@ -267,13 +270,13 @@ def sidebar() -> str:
         )
 
         st.divider()
-        with st.form("pipeline_runner_form"):
-            product_category = st.text_input("Enter Product Category", value="wireless earbuds")
-            submitted = st.form_submit_button("Run Intelligence Pipeline")
+        with st.form("pipeline_form"):
+            user_url_input = st.text_input("Enter Amazon/Retailer URL")
+            run_button = st.form_submit_button("Run Intelligence Pipeline")
 
-        if submitted:
+        if run_button:
             try:
-                run_pipeline(product_category)
+                run_pipeline(user_url_input)
             except subprocess.CalledProcessError as exc:
                 exc = exc.stderr.strip() or exc.stdout.strip() or str(exc)
                 st.error(f"Pipeline failed: {exc}")
