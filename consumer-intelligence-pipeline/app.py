@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
+from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -17,6 +18,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+APP_ROOT = Path(__file__).resolve().parent
+LOGO_PATH = APP_ROOT / "assets" / "ci_logo.svg"
 
 def apply_theme() -> None:
     st.markdown(
@@ -35,7 +39,8 @@ def apply_theme() -> None:
                 color: #475569 !important;
                 opacity: 1;
             }
-            section[data-testid="stSidebar"] div.stButton > button {
+            section[data-testid="stSidebar"] div.stButton > button,
+            section[data-testid="stSidebar"] div[data-testid="stFormSubmitButton"] > button {
                 width: 100%;
                 border-radius: 12px;
                 border: 1px solid rgba(148, 163, 184, 0.32);
@@ -43,13 +48,23 @@ def apply_theme() -> None:
                 color: #0f172a !important;
                 font-weight: 600;
             }
-            section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+            section[data-testid="stSidebar"] button,
+            section[data-testid="stSidebar"] button *,
+            section[data-testid="stSidebar"] button p,
+            section[data-testid="stSidebar"] button span,
+            section[data-testid="stSidebar"] button div {
+                color: #0f172a !important;
+                -webkit-text-fill-color: #0f172a !important;
+            }
+            section[data-testid="stSidebar"] div.stButton > button[kind="primary"],
+            section[data-testid="stSidebar"] div[data-testid="stFormSubmitButton"] > button[kind="primary"] {
                 background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
                 color: #0f172a !important;
                 border-color: rgba(59, 130, 246, 0.45);
                 box-shadow: 0 10px 22px rgba(15, 23, 42, 0.16);
             }
-            section[data-testid="stSidebar"] div.stButton > button:hover {
+            section[data-testid="stSidebar"] div.stButton > button:hover,
+            section[data-testid="stSidebar"] div[data-testid="stFormSubmitButton"] > button:hover {
                 border-color: rgba(59, 130, 246, 0.48);
                 color: #0f172a !important;
             }
@@ -92,6 +107,24 @@ def apply_theme() -> None:
                 color: #334155;
                 margin-bottom: 0;
                 line-height: 1.7;
+            }
+            .brand-shell {
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 18px;
+                padding: 0.85rem 0.95rem;
+                margin-bottom: 1rem;
+            }
+            .brand-title {
+                color: #f8fafc;
+                font-size: 1.1rem;
+                font-weight: 700;
+                margin-bottom: 0.2rem;
+            }
+            .brand-subtitle {
+                color: rgba(248, 250, 252, 0.76);
+                font-size: 0.88rem;
+                margin-bottom: 0;
             }
         </style>
         """,
@@ -191,10 +224,27 @@ def render_navigation_buttons() -> str:
     return st.session_state["selected_page"]
 
 
+def render_sidebar_brand() -> None:
+    st.markdown('<div class="brand-shell">', unsafe_allow_html=True)
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=130)
+    else:
+        st.markdown(
+            """
+            <div style="font-size: 2.2rem; font-weight: 800; color: #67e8f9; line-height: 1; margin-bottom: 0.45rem;">
+                Ci
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown('<div class="brand-title">Consumer Intelligence</div>', unsafe_allow_html=True)
+    st.markdown('<p class="brand-subtitle">End-to-End Cloud Data Pipeline</p>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def render_sidebar() -> str:
     with st.sidebar:
-        st.markdown("## Consumer Intelligence")
-        st.caption("End-to-End Cloud Data Pipeline")
+        render_sidebar_brand()
         st.divider()
 
         page = render_navigation_buttons()
@@ -343,6 +393,25 @@ def render_home_page() -> None:
 
     with warning_tab:
         st.warning("The following retailer links will not work on this demo site.")
+        st.markdown("### Suggested Test URLs for Reviewers")
+
+        st.markdown("**1. The Sandbox Sites (100% Success Rate)**")
+        st.caption("These sites are specifically built for scraping. They use standard HTML structures and are the safest way to demonstrate the full pipeline from extraction through fallback NLP logic.")
+        st.markdown("Product (Book)")
+        st.code("https://books.toscrape.com/", language=None)
+
+        st.markdown("**2. Independent E-Commerce Brands (Stable Real-World Test)**")
+        st.caption("Many modern brands run on platforms such as Shopify with server-side rendered pages. These are strong real-world candidates for this pipeline's extraction engine.")
+        st.markdown("NuPhy (Tech Accessories)")
+        st.code("https://nuphy.com/collections/keyboards/products", language=None)
+        st.markdown("Allbirds (Apparel)")
+        st.code("https://www.allbirds.com/products", language=None)
+
+        st.markdown("**3. The High-Stakes Test (Enterprise Marketplaces)**")
+        st.caption("Large marketplaces often use aggressive anti-bot services such as Datadome or Cloudflare. The pipeline includes realistic headers, but cloud-hosted IPs can still be rate-limited or blocked.")
+        st.markdown("Amazon (Gigabyte Monitor)")
+        st.code("https://www.amazon.com", language=None)
+
         st.markdown(
             """
             <div class="section-card">
@@ -355,6 +424,7 @@ def render_home_page() -> None:
             """,
             unsafe_allow_html=True,
         )
+        st.info("Note on e-commerce security: this pipeline is optimized for server-side rendered HTML. Modern single page applications heavily reliant on JavaScript rendering, such as Shopee or Lazada, intentionally block automated cloud extraction and are outside the scope of this demonstration.")
 
 
 def render_empty_dashboard_state() -> None:
