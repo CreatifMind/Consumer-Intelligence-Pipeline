@@ -144,6 +144,22 @@ def run_query(query: str) -> pd.DataFrame:
         return pd.read_sql_query(text(query), connection)
 
 
+def load_fact_reviews_count() -> int:
+    """Return the current number of rows in fact_reviews, treating a missing table as empty."""
+    query = "SELECT COUNT(*) AS review_count FROM fact_reviews"
+
+    try:
+        result = run_query(query)
+        if result.empty:
+            return 0
+        return int(result.iloc[0]["review_count"])
+    except SQLAlchemyError as exc:
+        error_text = str(exc).lower()
+        if "fact_reviews" in error_text and ("does not exist" in error_text or "undefinedtable" in error_text):
+            return 0
+        raise
+
+
 def run_pipeline(user_url_input: str) -> None:
     """Run the scraper, NLP processor, and database loader sequentially."""
     os.makedirs(RAW_DIR, exist_ok=True)
@@ -182,14 +198,20 @@ def run_pipeline(user_url_input: str) -> None:
     st.rerun()
 
 
-def show_pipeline_feedback() -> None:
-    """Display post-run success feedback once after the pipeline refresh."""
+def show_pipeline_feedback() -> bool:
+    """Display post-run success feedback and trigger one final rerun after balloons."""
     if st.session_state.pop("show_pipeline_balloons", False):
         st.balloons()
+        st.session_state["show_pipeline_success_message"] = True
+        st.rerun()
+        return True
 
-    success_message = st.session_state.pop("pipeline_success_message", "")
-    if success_message:
-        st.success(success_message)
+    if st.session_state.pop("show_pipeline_success_message", False):
+        success_message = st.session_state.pop("pipeline_success_message", "")
+        if success_message:
+            st.success(success_message)
+
+    return False
 
 
 def load_executive_kpis() -> pd.Series:
@@ -237,11 +259,20 @@ def load_pricing_snapshot() -> pd.DataFrame:
 
 
 def load_last_refresh() -> str:
+    if load_fact_reviews_count() == 0:
+        return "Unavailable"
+
     query = """
         SELECT COALESCE(MAX(load_timestamp)::text, 'Unavailable') AS last_refresh
         FROM fact_reviews
     """
-    return str(run_query(query).iloc[0]["last_refresh"])
+    try:
+        return str(run_query(query).iloc[0]["last_refresh"])
+    except SQLAlchemyError as exc:
+        error_text = str(exc).lower()
+        if "fact_reviews" in error_text and ("does not exist" in error_text or "undefinedtable" in error_text):
+            return "Unavailable"
+        raise
 
 
 def render_insight_card(label: str, value: str, body: str) -> None:
@@ -255,6 +286,17 @@ def render_insight_card(label: str, value: str, body: str) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_empty_state() -> None:
+    """Show a first-run welcome state when the warehouse does not contain any facts yet."""
+    left, center, right = st.columns([1, 1.6, 1])
+
+    with center:
+        st.markdown("<div style='padding-top: 5rem;'></div>", unsafe_allow_html=True)
+        st.info(
+            "👋 Welcome to the Consumer Intelligence Engine! Please enter a product URL in the sidebar to begin your first analysis."
+        )
 
 
 def sidebar() -> str:
@@ -506,10 +548,18 @@ def render_pricing_intelligence() -> None:
 
 def main() -> None:
     apply_theme()
-    show_pipeline_feedback()
 
     try:
+        fact_reviews_count = load_fact_reviews_count()
+
+        if show_pipeline_feedback():
+            return
+
         page = sidebar()
+
+        if fact_reviews_count == 0:
+            render_empty_state()
+            return
 
         if page == "Executive Summary":
             render_executive_summary()
