@@ -251,6 +251,12 @@ def render_navigation_buttons() -> str:
     return st.session_state["selected_page"]
 
 def render_sidebar() -> str:
+    # --- CALLBACK FUNCTION TO PREVENT STATE ERRORS ---
+    def reset_app():
+        st.session_state["pipeline_url_input"] = ""
+        st.session_state["dashboard_cleared"] = True
+        st.cache_data.clear()
+
     with st.sidebar:
         st.markdown('<div class="sidebar-title">Consumer Intelligence</div>', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-subtitle">End-to-End Cloud Data Pipeline</div>', unsafe_allow_html=True)
@@ -312,11 +318,8 @@ def render_sidebar() -> str:
                     st.warning("Please enter a valid URL first!")
 
         st.write("")
-        if st.button("Refresh for Next URL", use_container_width=True):
-            st.session_state["pipeline_url_input"] = ""
-            st.session_state["dashboard_cleared"] = True
-            st.cache_data.clear()
-            st.rerun()
+        # Use the callback function instead of standard execution flow
+        st.button("Refresh for Next URL", use_container_width=True, on_click=reset_app)
 
         st.markdown('<hr class="sidebar-rule">', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-section-heading">Download Results</div>', unsafe_allow_html=True)
